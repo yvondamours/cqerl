@@ -522,6 +522,7 @@ decode_response_term(#cqerl_frame{opcode=?CQERL_OP_RESULT}, << 3:?INT, Body/bina
 decode_response_term(#cqerl_frame{opcode=?CQERL_OP_RESULT}, << 4:?INT, Body/binary >>) ->
     {ok, QueryID, Rest0} = ?DATA:decode_short_bytes(Body),
     {ok, QueryMetadata, Rest1} = decode_result_metadata(Rest0),
+    io:format("Metadata ~w~n", [QueryMetadata]),
     {ok, ResultMetadata, _Rest} = decode_result_metadata(Rest1),
     {ok, {prepared, {QueryID, QueryMetadata, ResultMetadata}}};
 
