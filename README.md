@@ -4,7 +4,7 @@ Native Erlang client for CQL3 over Cassandra's binary protocol v2 (a.k.a. what y
 
 [**Usage**](#usage) &middot; [Connecting](#connecting) &middot; [Performing queries](#performing-queries) &middot; [Query options](#providing-options-along-queries) &middot; [Batched queries](#batched-queries) &middot; [Reusable queries](#reusable-queries) &middot; [Data types](#data-types)
 
-[**Installation**](#installation) &middot; [**Tests**](#tests) &middot; [**License**](#license)
+[**Installation**](#installation) &middot; [**Compatibility**](#compatibility) &middot; [**Tests**](#tests) &middot; [**License**](#license)
 
 ---
 
@@ -169,12 +169,8 @@ end.
 
 When performing queries, you can provide more information than just the query statement using the `#cql_query{}` record, which includes the following fields:
 
-1. The `query` statement, as a string or binary
-2. `values` for binding variables from the query statement. This is a `proplists`, where the keys match the column names or binding variable names in the statement, in **lowercase**. Special cases include providing `TTL` and `TIMESTAMP` option in statements, in which case the proplist key would be `[ttl]` and `[timestamp]` respectively.
-
-    Also, when providing the value for a `uuid`-type column, you can give the value `new`, `strong` or `weak`, in which case CQErl will generate a random UUID (v4), with either a *strong* or *weak* number random generator.
-    
-    Finally, when providing the value for a `timeuuid` or `timestamp` column, you can give the value `now`, in which case CQErl will generate a normal timestamp, or a UUID (v1) matching the current date and time.
+1. The query `statement`, as a string or binary
+2. `values` for binding variables from the query statement (see next section).
     
 3. You can tell CQErl to consider a query `reusable` or not (see below for what that means). By default, it will detect binding variables and consider it reusable if it contains (named or not) any. Queries containing *named* binding variables will be considered reusable no matter what you set `reusable` to. If you explicitely set `reusable` to `false` on a query having positional variable bindings (`?`), you would provide values with in `{Type, Value}` pairs instead of `{Key, Value}`. 
 4. You can specify how many rows you want in every result page using the `page_size` (integer) field. The devs at Cassandra recommend a value of 100 (which is the default).
@@ -195,6 +191,23 @@ When performing queries, you can provide more information than just the query st
     * `?CQERL_CONSISTENCY_SERIAL`
     * `?CQERL_CONSISTENCY_LOCAL_SERIAL`
     
+##### Variable bindings
+
+In the `#cql_query{}` record, you can provide `values` as a `proplists`, where the keys match the column names or binding variable names in the statement, in **lowercase**. 
+
+Special cases include: 
+
+- providing `TTL` and `TIMESTAMP` option in statements, in which case the proplist key would be `[ttl]` and `[timestamp]` respectively. Note that, while values for a column of type `timestamp` are provided in **milliseconds**, a value for the `TIMESTAMP` option is expected in **microseconds**.
+- `UPDATE keyspace SET set = set + ? WHERE id = 1;`. The name for this variable binding is `set`, the name of the column, and it's expected to be an erlang **list** of values.
+- `UPDATE keyspace SET list = list + ? WHERE id = 1;`. The name for this variable binding is `list`, the name of the column, and it's expected to be an erlang **list** of values.
+- `UPDATE keyspace SET map[?] = 1 WHERE id = 1;`. The name for this variable binding is `key(map)`, where `map` is the name of the column.
+- `UPDATE keyspace SET map['key'] = ? WHERE id = 1;`. The name for this variable binding is `value(map)`, where `map` is the name of the column.
+- `UPDATE keyspace SET list[?] = 1 WHERE id = 1;`. The name for this variable binding is `idx(list)`, where `list` is the name of the column.
+
+    Also, when providing the value for a `uuid`-type column, you can give the value `new`, `strong` or `weak`, in which case CQErl will generate a random UUID (v4), with either a *strong* or *weak* number random generator.
+    
+    Finally, when providing the value for a `timeuuid` or `timestamp` column, you can give the value `now`, in which case CQErl will generate a normal timestamp, or a UUID (v1) matching the current date and time.
+
 ##### Batched queries
 
 To perform batched queries (which can include any non-`SELECT` [DML][5] statements), simply put one or more `#cql_query{}` records in a `#cql_query_batch{}` record, and run it in place of a normal `#cql_query{}`. `#cql_query_batch{}` include the following fields:
@@ -242,7 +255,7 @@ decimal               | `{Unscaled :: integer(), Scale :: integer()}`
 double                | **float** (signed 64-bit)
 float                 | **float** (signed 32-bit)
 int                   | **integer** (signed 32-bit)
-timestamp             | **integer** (signed 64-bit), `now`, [binary or string][6]
+timestamp             | **integer** (milliseconds, signed 64-bit), `now`, [binary or string][6]
 uuid                  | **binary**, `new`
 varchar               | **binary**, string
 varint                | **integer** (arbitrary precision)
@@ -252,6 +265,12 @@ inet                  | `{X1, X2, X3, X4}` (IPv4), `{Y1, Y2, Y3, Y4, Y5, Y6, Y7,
 ### Installation
 
 Just include this repository in your project's `rebar.config` file and run `./rebar get-deps`. See [rebar][3] for more details on how to use rebar for Erlang project management.
+
+### Compatibility
+
+As said earlier, this library uses Cassandra's newest native protocol version (2), which is said to perform better than the older Thrift-based interface. It also speaks CQL version 3, and uses new features available in Cassandra 2.X, such as paging, parametrization, query preparation and so on.
+
+All this means is that this library works with Cassandra 2.X, configured to enable the native protocol. [This documentation page][8] gives details about the how to configure this protocol. In the `cassandra.yaml` configuration file of your Cassandra installation, the `start_native_transport` need to be set to true and you need to take note of the value for `native_transport_port`, which is the port used by this library.
 
 ### Tests
 
@@ -291,3 +310,4 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 [5]: http://en.wikipedia.org/wiki/Data_manipulation_language
 [6]: http://www.datastax.com/documentation/cql/3.0/webhelp/index.html#cql/cql_reference/cql_data_types_c.html#reference_ds_dsf_555_yj
 [7]: http://www.datastax.com/dev/blog/client-side-improvements-in-cassandra-2-0
+[8]: http://www.datastax.com/documentation/cassandra/2.0/cassandra/configuration/configCassandra_yaml_r.html

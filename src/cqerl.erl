@@ -247,52 +247,53 @@ init([]) ->
 
 
 handle_call(get_any_client, _From, State=#cqerl_state{client_stats=[]}) ->
-    {reply, {error, no_configured_node}, State};
+    {reply, {error, no_configured_node}, State#cqerl_state{retrying=false}};
 
 handle_call(get_any_client, From, State=#cqerl_state{client_stats=Stats, clients=Clients, retrying=Retrying}) ->
     case select_client(Clients, #cql_client{busy=false, _='_'}, From) of
-        no_available_client when Retrying ->
+        no_available_clients when Retrying ->
             retry;
         
-        no_available_client ->
+        no_available_clients ->
             erlang:send_after(?RETRY_INITIAL_DELAY, self(), {retry, get_any_client, From, ?RETRY_INITIAL_DELAY}),
-            {noreply, State};
+            {noreply, State#cqerl_state{retrying=false}};
         
         {existing, _, _} ->
-            {noreply, State};
+            {noreply, State#cqerl_state{retrying=false}};
         
         {new, _Pid, NodeKey} ->
             {ok, CStats=#cql_client_stats{count=Count}} = orddict:find(NodeKey, Stats),
-            {noreply, State#cqerl_state{client_stats = orddict:store(NodeKey, CStats#cql_client_stats{count=Count+1}, Stats)}}
+            {noreply, State#cqerl_state{retrying=false, client_stats = orddict:store(NodeKey, CStats#cql_client_stats{count=Count+1}, Stats)}}
     end;
 
-handle_call({get_client, Node, Opts}, From, State=#cqerl_state{clients=Clients, client_stats=Stats, retrying=Retrying, globalopts=GlobalOpts}) ->
+handle_call(Req={get_client, Node, Opts}, From, State=#cqerl_state{clients=Clients, client_stats=Stats, retrying=Retrying, globalopts=GlobalOpts}) ->
     NodeKey = node_key(Node, {Opts, GlobalOpts}),
     case orddict:find(NodeKey, Stats) of
         error ->
             State2 = new_pool(NodeKey, Opts, GlobalOpts, State),
             case orddict:find(NodeKey, State2#cqerl_state.client_stats) of
-                #cql_client_stats{count=0} -> {reply, {error, no_available_clients}, State2};
+                #cql_client_stats{count=0} -> 
+                    {reply, {error, no_available_clients}, State2#cqerl_state{retrying=false}};
                 _ -> 
                     select_client(Clients, #cql_client{node=NodeKey, busy=false, pid='_'}, From),
-                    {noreply, State2}
+                    {noreply, State2#cqerl_state{retrying=false}}
             end;
         
         _ ->
             case select_client(Clients, #cql_client{node=NodeKey, busy=false, pid='_'}, From) of
-                no_available_client when Retrying ->
+                no_available_clients when Retrying ->
                     retry;
                 
-                no_available_client ->
-                    erlang:send_after(?RETRY_INITIAL_DELAY, self(), {retry, {get_client, NodeKey, Opts}, From, ?RETRY_INITIAL_DELAY}),
-                    {noreply, State};
+                no_available_clients ->
+                    erlang:send_after(?RETRY_INITIAL_DELAY, self(), {retry, Req, From, ?RETRY_INITIAL_DELAY}),
+                    {noreply, State#cqerl_state{retrying=false}};
                 
                 {existing, _, _} ->
-                    {noreply, State};
+                    {noreply, State#cqerl_state{retrying=false}};
                 
                 {new, _Pid, NodeKey} ->
                     {ok, CStats=#cql_client_stats{count=Count}} = orddict:find(NodeKey, Stats),
-                    {noreply, State#cqerl_state{client_stats=orddict:store(NodeKey, CStats#cql_client_stats{count=Count+1}, Stats)}}
+                    {noreply, State#cqerl_state{retrying=false, client_stats=orddict:store(NodeKey, CStats#cql_client_stats{count=Count+1}, Stats)}}
             end
     end;
 
@@ -351,7 +352,6 @@ handle_cast({client_busy, Pid}, State=#cqerl_state{clients=Clients}) ->
     {noreply, State};
 
 handle_cast({client_avail, Pid}, State=#cqerl_state{clients=Clients}) ->
-    ct:log("Avail: ~w", [Pid]),
     case ets:lookup(Clients, Pid) of
         [Client] ->
             ets:insert(Clients, Client#cql_client{busy=false});
@@ -429,9 +429,15 @@ handle_info({retry, Msg, From, Delay}, State) ->
                     erlang:send_after(NewDelay, self(), {retry, Msg, From, NewDelay});
                 _ ->
                     gen_server:reply(From, {error, no_available_clients})
-            end;
-        {reply, Client, State} ->
-            gen_server:reply(From, Client)
+            end,
+            {noreply, State};
+        
+        {noreply, State1} -> 
+            {noreply, State1};
+        
+        {reply, Reply, State1} ->
+            gen_server:reply(From, Reply),
+            {noreply, State1}
     end;
 
 handle_info(_Msg, State) ->
@@ -453,12 +459,16 @@ code_change(_OldVsn, State, _Extra) ->
 %% Private functions
 %% =================
 
-node_key({Ip, Port}, Keyspace0) ->
-    Keyspace = case Keyspace0 of
-        {LocalOpts, GlobalOpts} ->
-            OptGetter = make_option_getter(GlobalOpts, LocalOpts),
-            OptGetter(keyspace);
-        _ -> Keyspace0
+node_key(Inet, Keyspace0) ->
+    case Inet of
+        {Ip, Port} -> 
+            Keyspace = case Keyspace0 of
+                {LocalOpts, GlobalOpts} ->
+                    OptGetter = make_option_getter(GlobalOpts, LocalOpts),
+                    OptGetter(keyspace);
+                _ -> Keyspace0
+            end;
+        {Ip, Port, Keyspace} -> ok
     end,
     Keyspace1 = case Keyspace of
         Val when is_atom(Val) -> Val;
@@ -492,7 +502,7 @@ new_pool(NodeKey={Ip, Port, Keyspace}, LocalOpts, GlobalOpts, State=#cqerl_state
     State#cqerl_state{client_stats=orddict:store(NodeKey, ClientStats, ClientsStats)}.
 
 
-prepare_pool_members(NodeKey, ClientStats, Clients, 0) -> ClientStats;
+prepare_pool_members(_NodeKey, ClientStats, _Clients, 0) -> ClientStats;
 prepare_pool_members(NodeKey, ClientStats=#cql_client_stats{count=Count}, Clients, N) ->
     case pooler:take_member(pool_from_node(NodeKey)) of
         error_no_members -> 

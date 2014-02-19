@@ -74,6 +74,8 @@ encode_bytes(Bytes) when is_binary(Bytes) ->
 
 -spec encode_short_bytes(String :: binary()) -> {ok, bitstring()} | {error, badarg}.
 
+encode_short_bytes(null) ->
+    {ok, << 0:?SHORT >> };
 encode_short_bytes(Bytes) when is_binary(Bytes), size(Bytes) =< ?MAX_SHORT ->
     Size = size(Bytes),
     {ok, << Size:?SHORT, Bytes/binary >>}.
@@ -279,6 +281,9 @@ encode_data({ascii, Data}) when is_list(Data) ->
         true -> list_to_binary(Data)
     end;
 
+encode_data({ascii, Atom}) when is_atom(Atom) ->
+    atom_to_binary(Atom, latin1);
+
 encode_data({ascii, Data}) when is_binary(Data) ->
     Data;
 
@@ -316,7 +321,8 @@ encode_data({int, Val}) ->
 
 encode_data({TextType, Val}) when TextType == text orelse TextType == varchar ->
     if  is_binary(Val) -> Val;
-        is_list(Val) -> list_to_binary(Val)
+        is_list(Val) -> list_to_binary(Val);
+        is_atom(Val) -> atom_to_binary(Val, latin1)
     end;
 
 encode_data({timestamp, now}) ->
